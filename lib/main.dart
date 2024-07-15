@@ -37,22 +37,27 @@ class _HomePageState extends State<HomePage> {
 
   late final ColmiR0xController _controller;
   ControllerState _controllerState = ControllerState.disconnected;
+  ControlEvent _controlEvent = ControlEvent.none;
 
-  int? _rawX;
-  int? _rawY;
-  int? _rawZ;
-  int? _accelMillis;
-  double? _scroll;
-  double? _impact;
-  double? _netGforce;
+  int _rawX = 0;
+  int _rawY = 0;
+  int _rawZ = 0;
+  int _accelMillis = 0;
+  double _rawScrollPosition = 0.0;
+  double _filteredScrollPosition = 0.0;
+  double _rawNetGforce = 0.0;
+  double _filteredNetGforce = 0.0;
+
   static const int _graphPoints = 300;
-  final List<double> _scrollList = [];
-  final List<double> _impactList = [];
-  final List<double> _netGForceList = [];
+  final List<double> _rawScrollPositionList = [];
+  final List<double> _filteredScrollPositionList = [];
+  final List<double> _filteredNetGforceList = [];
+  final List<double> _rawNetGForceList = [];
   int _taps = 0;
 
   _HomePageState() {
-    _controller = ColmiR0xController(_stateListener, _controlEventListener);
+    // note: rawEventListener is not necessary, only used for realtime display of raw values in this demo
+    _controller = ColmiR0xController(_stateListener, _controlEventListener, rawEventListener: _rawEventListener);
     _controller.connect();
   }
 
@@ -62,24 +67,36 @@ class _HomePageState extends State<HomePage> {
     setState(() {});
   }
 
-  void _controlEventListener(int rawX, int rawY, int rawZ, double scrollPosition, double impact, double netGforce, int accelMillis, bool isTap) {
-    //debugPrint('Control Event Listener called: ');
+  void _controlEventListener(ControlEvent event) {
+    debugPrint('Control Event Listener called: $event');
+    _controlEvent = event;
+    if (event == ControlEvent.provisionalSelect) _taps++;
+
+    setState(() {});
+  }
+
+  void _rawEventListener(int rawX, int rawY, int rawZ, double rawScrollPosition, double filteredScrollPosition, double rawNetGforce, double filteredNetGforce, int accelMillis) {
+    _accelMillis = accelMillis;
     _rawX = rawX;
     _rawY = rawY;
     _rawZ = rawZ;
-    _scroll = scrollPosition;
-    _impact = impact;
-    _netGforce = netGforce;
-    _accelMillis = accelMillis;
 
-    if (isTap) _taps++;
+    _rawNetGforce = rawNetGforce;
+    _filteredNetGforce = filteredNetGforce;
 
-    _netGForceList.add(_netGforce!);
-    if (_netGForceList.length > _graphPoints) _netGForceList.removeAt(0);
-    _scrollList.add(_scroll!);
-    if (_scrollList.length > _graphPoints) _scrollList.removeAt(0);
-    _impactList.add(_impact!);
-    if (_impactList.length > _graphPoints) _impactList.removeAt(0);
+    _rawScrollPosition = rawScrollPosition;
+    _filteredScrollPosition = filteredScrollPosition;
+
+    // show the changing values on oscilloscopes
+    _rawNetGForceList.add(_rawNetGforce);
+    if (_rawNetGForceList.length > _graphPoints) _rawNetGForceList.removeAt(0);
+    _filteredNetGforceList.add(_filteredNetGforce);
+    if (_filteredNetGforceList.length > _graphPoints) _filteredNetGforceList.removeAt(0);
+
+    _filteredScrollPositionList.add(_filteredScrollPosition);
+    if (_filteredScrollPositionList.length > _graphPoints) _filteredScrollPositionList.removeAt(0);
+    _rawScrollPositionList.add(_rawScrollPosition);
+    if (_rawScrollPositionList.length > _graphPoints) _rawScrollPositionList.removeAt(0);
 
     setState(() {});
   }
@@ -115,69 +132,69 @@ class _HomePageState extends State<HomePage> {
               child: Text((_controllerState == ControllerState.disconnected) ? "Connect" : "Disconnect"),
             ),
             const Divider(),
+            Text('Current State: ${_controllerState.name}',),
+            Text('Last Event: ${_controlEvent.name}',),
+            const Divider(),
 
               // accelerometer data
               SizedBox(height: 120,
                 child: Wrap(direction: Axis.vertical, runSpacing: 30.0, children: [
-                Text('Accel Millis: ${_accelMillis ?? ''}',),
+                Text('Accel Millis: $_accelMillis',),
                 const SizedBox(height: 10),
-                Text('Raw X: ${_rawX ?? ''}',),
+                Text('Raw X: $_rawX',),
                 const SizedBox(height: 10),
-                Text('Raw Y: ${_rawY ?? ''}',),
+                Text('Raw Y: $_rawY',),
                 const SizedBox(height: 10),
-                Text('Raw Z: ${_rawZ ?? ''}',),
+                Text('Raw Z: $_rawZ',),
                 const SizedBox(height: 10),
                 Text('Taps: $_taps',),
                 const SizedBox(height: 10),
-                Column(children: [
-                  Row(children:[
-                    Text('Scroll: ${_scroll?.toStringAsFixed(2) ?? ''}',),
-                    Slider(value: _scroll ?? 0, min:-pi, max:pi, onChanged: (val)=>{},),
-                  ]),
-                  Row(children:[
-                    Text('Impact: ${_impact?.toStringAsFixed(2) ?? ''}',),
-                    Slider(value: _impact?.clamp(0, 1) ?? 0, min:0, max:1, onChanged: (val)=>{},),
-                  ]),
-                ]),
               ]),
             ),
             const Divider(),
 
-            Text('Scroll: ${_scroll?.toStringAsFixed(2) ?? ''}',),
-            SizedBox(height: 120,
+            Text('Raw Scroll: ${_rawScrollPosition.toStringAsFixed(2)}',),
+            SizedBox(height: 90,
             child:Oscilloscope(
               yAxisMin: -pi,
               yAxisMax: pi,
-              dataSet: _scrollList.toList(),
+              dataSet: _rawScrollPositionList.toList(),
               backgroundColor: Colors.white,
               traceColor: Colors.black,
             )),
             const Divider(),
 
-            const Divider(),
-            Text('Impact: ${_impact?.toStringAsFixed(2) ?? ''}',),
-            SizedBox(height: 120,
+            Text('Raw Net g-Force: ${_rawNetGforce.toStringAsFixed(2)}',),
+            SizedBox(height: 90,
             child:Oscilloscope(
               yAxisMin: 0,
               yAxisMax: 1,
-              dataSet: _impactList.toList(),
+              dataSet: _rawNetGForceList.toList(),
               backgroundColor: Colors.white,
               traceColor: Colors.black,
             )),
             const Divider(),
 
+            Text('Filtered Scroll: ${_filteredScrollPosition.toStringAsFixed(2)}',),
+            SizedBox(height: 90,
+            child:Oscilloscope(
+              yAxisMin: -pi,
+              yAxisMax: pi,
+              dataSet: _filteredScrollPositionList.toList(),
+              backgroundColor: Colors.white,
+              traceColor: Colors.black,
+            )),
             const Divider(),
-            Text('GForce: ${_netGforce?.toStringAsFixed(2) ?? ''}',),
-            SizedBox(height: 120,
+
+            Text('Filtered Net g-Force: ${_filteredNetGforce.toStringAsFixed(2)}',),
+            SizedBox(height: 90,
             child:Oscilloscope(
               yAxisMin: 0,
               yAxisMax: 1,
-              dataSet: _netGForceList.toList(),
+              dataSet: _filteredNetGforceList.toList(),
               backgroundColor: Colors.white,
               traceColor: Colors.black,
             )),
-            const Divider(),
-
           ],
         ),
       ),
