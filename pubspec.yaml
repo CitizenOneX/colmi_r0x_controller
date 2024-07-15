@@ -10,6 +10,8 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_blue_plus: ^1.32.8
+  oscilloscope: ^0.2.0+1
+  real_time_chart: ^0.0.1
 
 dev_dependencies:
   flutter_test:
