@@ -41,6 +41,21 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.18.0"
+  colmi_r0x_controller:
+    dependency: "direct main"
+    description:
+      path: "../.."
+      relative: true
+    source: path
+    version: "0.1.0"
+  cupertino_icons:
+    dependency: transitive
+    description:
+      name: cupertino_icons
+      sha256: ba631d1c7f7bef6b729a622b7b752645a2d076dba9976925b8f25725a30e1ee6
+      url: "https://pub.dev"
+    source: hosted
+    version: "1.0.8"
   fake_async:
     dependency: transitive
     description:
@@ -131,6 +146,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.12.0"
+  oscilloscope:
+    dependency: transitive
+    description:
+      name: oscilloscope
+      sha256: c7769846ccf948ea7a276954db169be6f13486f54ecf920923e115c0a741b7a9
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.2.0+1"
   path:
     dependency: transitive
     description:
@@ -139,6 +162,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.9.0"
+  real_time_chart:
+    dependency: transitive
+    description:
+      name: real_time_chart
+      sha256: fb24041e9e949295e5f3eabb65ec2835fb86d4dc6a35a382bc9d2e9998915ecc
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.0.1"
   sky_engine:
     dependency: transitive
     description: flutter

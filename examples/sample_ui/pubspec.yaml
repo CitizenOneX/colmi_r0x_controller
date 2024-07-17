@@ -1,5 +1,5 @@
-name: colmi_r0x_controller
-description: "COLMi R0x Controller Demo"
+name: colmi_r0x_controller_sample_ui
+description: "COLMi R0x Controller Sample UI Demo"
 publish_to: 'none'
 version: 0.1.0
 
@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  colmi_r0x_controller:
+    path: ../../
   flutter_blue_plus: ^1.32.8
 
 dev_dependencies:

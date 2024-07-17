@@ -77,7 +77,7 @@ class _HomePageState extends State<HomePage> {
     debugPrint('Control Event Listener called: $event');
     _controlEvent = event;
     switch (event) {
-      case ControlEvent.provisionalIntent:
+      case ControlEvent.confirmIntent:
          _taps++;
         break;
       case ControlEvent.scrollUp:
@@ -142,7 +142,7 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('COLMi R0x Controller Demo'),
+        title: const Text('COLMi R0x Controller Raw Viewer Demo'),
       ),
       body: Align(
         alignment: Alignment.centerLeft,
