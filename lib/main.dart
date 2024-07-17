@@ -45,15 +45,21 @@ class _HomePageState extends State<HomePage> {
   int _accelMillis = 0;
   double _rawScrollPosition = 0.0;
   double _filteredScrollPosition = 0.0;
+  double _cumulativeScrollPosition = 0.0;
   double _rawNetGforce = 0.0;
   double _filteredNetGforce = 0.0;
+  double _filteredNetOrthoForce = 0.0;
 
   static const int _graphPoints = 300;
   final List<double> _rawScrollPositionList = [];
   final List<double> _filteredScrollPositionList = [];
+  final List<double> _cumulativeScrollPositionList = [];
   final List<double> _filteredNetGforceList = [];
   final List<double> _rawNetGForceList = [];
+  final List<double> _filteredNetOrthoForceList = [];
   int _taps = 0;
+  int _scrollUps = 0;
+  int _scrollDowns = 0;
 
   _HomePageState() {
     // note: rawEventListener is not necessary, only used for realtime display of raw values in this demo
@@ -70,12 +76,23 @@ class _HomePageState extends State<HomePage> {
   void _controlEventListener(ControlEvent event) {
     debugPrint('Control Event Listener called: $event');
     _controlEvent = event;
-    if (event == ControlEvent.provisionalSelect) _taps++;
+    switch (event) {
+      case ControlEvent.provisionalIntent:
+         _taps++;
+        break;
+      case ControlEvent.scrollUp:
+        _scrollUps++;
+        break;
+      case ControlEvent.scrollDown:
+        _scrollDowns++;
+        break;
+      default:
+    }
 
     setState(() {});
   }
 
-  void _rawEventListener(int rawX, int rawY, int rawZ, double rawScrollPosition, double filteredScrollPosition, double rawNetGforce, double filteredNetGforce, int accelMillis) {
+  void _rawEventListener(int rawX, int rawY, int rawZ, double rawScrollPosition, double filteredScrollPosition, double filteredScrollPositionDiff, double rawNetGforce, double filteredNetGforce, double filteredNetOrthoForce, int accelMillis) {
     _accelMillis = accelMillis;
     _rawX = rawX;
     _rawY = rawY;
@@ -83,16 +100,23 @@ class _HomePageState extends State<HomePage> {
 
     _rawNetGforce = rawNetGforce;
     _filteredNetGforce = filteredNetGforce;
+    _filteredNetOrthoForce = filteredNetOrthoForce;
 
     _rawScrollPosition = rawScrollPosition;
     _filteredScrollPosition = filteredScrollPosition;
+    _cumulativeScrollPosition += filteredScrollPositionDiff;
+    if (_cumulativeScrollPosition.abs() > 20) _cumulativeScrollPosition = 0;
 
     // show the changing values on oscilloscopes
     _rawNetGForceList.add(_rawNetGforce);
     if (_rawNetGForceList.length > _graphPoints) _rawNetGForceList.removeAt(0);
     _filteredNetGforceList.add(_filteredNetGforce);
     if (_filteredNetGforceList.length > _graphPoints) _filteredNetGforceList.removeAt(0);
+    _filteredNetOrthoForceList.add(_filteredNetOrthoForce);
+    if (_filteredNetOrthoForceList.length > _graphPoints) _filteredNetOrthoForceList.removeAt(0);
 
+    _cumulativeScrollPositionList.add(_cumulativeScrollPosition);
+    if (_cumulativeScrollPositionList.length > _graphPoints) _cumulativeScrollPositionList.removeAt(0);
     _filteredScrollPositionList.add(_filteredScrollPosition);
     if (_filteredScrollPositionList.length > _graphPoints) _filteredScrollPositionList.removeAt(0);
     _rawScrollPositionList.add(_rawScrollPosition);
@@ -137,17 +161,15 @@ class _HomePageState extends State<HomePage> {
             const Divider(),
 
               // accelerometer data
-              SizedBox(height: 120,
+              SizedBox(height: 60,
                 child: Wrap(direction: Axis.vertical, runSpacing: 30.0, children: [
-                Text('Accel Millis: $_accelMillis',),
-                const SizedBox(height: 10),
                 Text('Raw X: $_rawX',),
-                const SizedBox(height: 10),
                 Text('Raw Y: $_rawY',),
-                const SizedBox(height: 10),
                 Text('Raw Z: $_rawZ',),
-                const SizedBox(height: 10),
                 Text('Taps: $_taps',),
+                Text('Scroll Ups: $_scrollUps',),
+                Text('Scroll Downs: $_scrollDowns',),
+                Text('Accel Millis: $_accelMillis',),
                 const SizedBox(height: 10),
               ]),
             ),
@@ -164,6 +186,17 @@ class _HomePageState extends State<HomePage> {
             )),
             const Divider(),
 
+            Text('Cumulative Scroll Position: ${_cumulativeScrollPosition.toStringAsFixed(2)}',),
+            SizedBox(height: 90,
+            child:Oscilloscope(
+              yAxisMin: -4*pi,
+              yAxisMax: 4*pi,
+              dataSet: _cumulativeScrollPositionList.toList(),
+              backgroundColor: Colors.white,
+              traceColor: Colors.black,
+            )),
+            const Divider(),
+
             Text('Raw Net g-Force: ${_rawNetGforce.toStringAsFixed(2)}',),
             SizedBox(height: 90,
             child:Oscilloscope(
@@ -175,23 +208,23 @@ class _HomePageState extends State<HomePage> {
             )),
             const Divider(),
 
-            Text('Filtered Scroll: ${_filteredScrollPosition.toStringAsFixed(2)}',),
-            SizedBox(height: 90,
-            child:Oscilloscope(
-              yAxisMin: -pi,
-              yAxisMax: pi,
-              dataSet: _filteredScrollPositionList.toList(),
-              backgroundColor: Colors.white,
-              traceColor: Colors.black,
-            )),
-            const Divider(),
-
             Text('Filtered Net g-Force: ${_filteredNetGforce.toStringAsFixed(2)}',),
             SizedBox(height: 90,
             child:Oscilloscope(
               yAxisMin: 0,
               yAxisMax: 1,
               dataSet: _filteredNetGforceList.toList(),
+              backgroundColor: Colors.white,
+              traceColor: Colors.black,
+            )),
+            const Divider(),
+
+            Text('Filtered Net Ortho-Force: ${_filteredNetOrthoForce.toStringAsFixed(2)}',),
+            SizedBox(height: 90,
+            child:Oscilloscope(
+              yAxisMin: 0,
+              yAxisMax: 1,
+              dataSet: _filteredNetOrthoForceList.toList(),
               backgroundColor: Colors.white,
               traceColor: Colors.black,
             )),
