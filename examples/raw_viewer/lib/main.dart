@@ -77,7 +77,7 @@ class _HomePageState extends State<HomePage> {
     debugPrint('Control Event Listener called: $event');
     _controlEvent = event;
     switch (event) {
-      case ControlEvent.confirmIntent:
+      case ControlEvent.confirmSelectionIntent:
          _taps++;
         break;
       case ControlEvent.scrollUp:

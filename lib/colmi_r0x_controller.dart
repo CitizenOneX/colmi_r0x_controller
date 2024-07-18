@@ -21,11 +21,13 @@ enum ControlEvent {
   none,
   scrollUp,
   scrollDown,
-  provisionalIntent,
+  provisionalWakeupIntent,
+  provisionalSelectionIntent,
   verifyIntent25,
   verifyIntent50,
   verifyIntent75,
-  confirmIntent,
+  confirmWakeupIntent,
+  confirmSelectionIntent,
   timeout,
 }
 
@@ -378,7 +380,7 @@ class ColmiR0xController {
 
             if (isTap) {
               // taps are only valid provisional selections when in userInput mode
-              _controlEventListener.call(ControlEvent.provisionalIntent);
+              _controlEventListener.call(ControlEvent.provisionalSelectionIntent);
               _transitionTo(ControllerState.verifyIntentionalSelection);
             }
             else if (isScrollUp) {
@@ -402,7 +404,7 @@ class ColmiR0xController {
               if (_currentAbsPos >= _verifyStartPos + 2*pi) {
                 debugPrint('Wakeup intent verified');
                 // finished verifying
-                _controlEventListener.call(ControlEvent.confirmIntent);
+                _controlEventListener.call(ControlEvent.confirmWakeupIntent);
                 _transitionTo(ControllerState.userInput);
               }
               else if (_currentAbsPos >= _verifyStartPos + (3*pi)/2) {
@@ -433,7 +435,7 @@ class ColmiR0xController {
                 // finished verifying the selection, back to idle
                 debugPrint('Selection intent verified');
                 _pollRawDataOn = false;
-                _controlEventListener.call(ControlEvent.confirmIntent);
+                _controlEventListener.call(ControlEvent.confirmSelectionIntent);
                 _transitionTo(ControllerState.idle);
               }
               else if (_currentAbsPos >= _verifyStartPos + (3*pi)/2) {
