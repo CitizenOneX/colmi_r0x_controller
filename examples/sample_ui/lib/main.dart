@@ -31,12 +31,15 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-/// Dummy items for example ListView
+/// Dummy (focusable) items for example ListView
 class ListItem {
   bool isSelected = false;
-  String text;
+  final String text;
+  late final FocusNode focusNode;
 
-  ListItem(this.text);
+  ListItem(this.text) {
+    focusNode = FocusNode();
+  }
 }
 
 List<ListItem> getListData() {
@@ -66,7 +69,6 @@ class _HomePageState extends State<HomePage> {
   ControlEvent _controlEvent = ControlEvent.none;
 
   late final List<ListItem> _list;
-  late final List<FocusNode> _focusNodeList;
   int _focusItem = 0;
 
   final ScrollController _scrollController = ScrollController();
@@ -78,15 +80,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   @override
-  void initState() {
-    super.initState();
-    _focusNodeList = List.generate(_list.length, (index) => FocusNode());
-  }
-
-  @override
   void dispose() {
-    for (var f in _focusNodeList) {
-      f.dispose();
+    for (var f in _list) {
+      f.focusNode.dispose();
     }
     super.dispose();
   }
@@ -119,7 +115,7 @@ class _HomePageState extends State<HomePage> {
       default:
     }
 
-    Future.delayed(const Duration(milliseconds: 50),(){_focusNodeList[_focusItem].requestFocus();});
+    Future.delayed(const Duration(milliseconds: 50),(){_list[_focusItem].focusNode.requestFocus();});
     setState(() {});
   }
 
@@ -137,11 +133,11 @@ class _HomePageState extends State<HomePage> {
 
   Widget _getListItemTile(BuildContext context, int index) {
     return Focus(
-      focusNode: _focusNodeList[index],
+      focusNode: _list[index].focusNode,
       onFocusChange: (hasFocus) { setState(() {});}, // rebuild to apply visual changes
       child: Container(
         decoration: BoxDecoration(
-          border: _focusNodeList[index].hasFocus ? Border.all(color: Colors.blue, width: 2.0) : Border.all(color: Colors.white, width: 2.0),
+          border: _list[index].focusNode.hasFocus ? Border.all(color: Colors.blue, width: 2.0) : Border.all(color: Colors.white, width: 2.0),
           color: _list[index].isSelected ? Colors.red[100] : Colors.white,
         ),
         child: ListTile(
@@ -152,7 +148,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _setFocusAndScroll(int index) {
-    _focusNodeList[index].requestFocus();
+    _list[index].focusNode.requestFocus();
     _scrollController.animateTo(
       index * 25.0,
       duration: const Duration(milliseconds: 200),
