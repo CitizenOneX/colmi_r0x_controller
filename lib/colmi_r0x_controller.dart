@@ -40,10 +40,10 @@ class ColmiR0xController {
   static const int intentMillisInitial = 2000;
   /// how much more time to add each time the verification passes another 25%
   static const int intentMillisExtra = 500;
-  /// angle in radians to generate a scroll up or down event (should be positive)
-  static const double scrollEventThreshold = 0.4;
-  /// angle in radians to generate a cancel event during verify stage (should be negative)
-  static const double scrollCancelThreshold = -0.1;
+  /// angular velocity in radians per second to generate a scroll up or down event (should be positive)
+  static const double scrollEventThreshold = 5;
+  /// reverse scroll absolute angle in radians to generate a cancel event during verify stage (threshold value should be positive)
+  static const double scrollCancelThreshold = pi/4;
 
 
   StreamSubscription<List<ScanResult>>? _scanResultSubs; // device scan subscription
@@ -271,7 +271,7 @@ class ColmiR0xController {
         // as a new interaction so we can't refer to prior scroll position or forces
         (_accelMillis > 2000 || _sampleNumber < 0) ? _sampleNumber = 0 : _sampleNumber++;
         // TODO if we're on Android and the gap between messages has been high for a couple
-        // of seconds, send a bluetooth connection priority request
+        // of seconds, send a bluetooth connection priority request?
 
         // pull the raw values out of the bluetooth message payload
         var (rawX, rawY, rawZ) = ring.parseRawAccelerometerSensorData(data);
@@ -296,14 +296,14 @@ class ColmiR0xController {
             // first two samples we don't really have a choice but to calculate scroll position
             // and filtered g force
             if (_sampleNumber < 2) {
-              debugPrint('Sample $_sampleNumber: rawNetGforce=$rawNetGforce, scrollPosition=${atan2(rawY, rawX)}');
+              //debugPrint('Sample $_sampleNumber: rawNetGforce=$rawNetGforce, scrollPosition=${atan2(rawY, rawX)}');
               // calculate absolute "scroll" position when rotated around the finger
               // (the finger matches the Z axis)
               // range -pi .. pi
               rawScrollPosition = atan2(rawY, rawX);
               filteredScrollPosition = rawScrollPosition;
               _currentAbsPos = rawScrollPosition;
-              filteredNetGForce = rawNetGforce < 0.30 ? 0.0 : rawNetGforce;
+              filteredNetGForce = rawNetGforce < 0.50 ? 0.0 : rawNetGforce;
 
               if (_sampleNumber == 0) {
                 filteredScrollPositionDiff = 0.0;
@@ -327,23 +327,26 @@ class ColmiR0xController {
               _currentAbsPos = rawScrollPosition;
               filteredScrollPositionDiff = _calcScrollDistance(rawScrollPosition, _filteredScrollPositionPrev);
 
-              // we say it's a tap if it's large g-force that lasts for only one sample i.e. _/\_
-              // and not if there was significant scroll movement since the prior sample
-              isTap = (_filteredNetGForce[0] == 0.0) && (_filteredNetGForce[1] > 1.24) && (filteredNetGForce == 0.0)
-              && (_calcScrollDistance(rawScrollPosition, _rawScrollPositionPrev).abs() < pi/2); // TODO that's a lot of movement, but the raw does get pushed around on a tap
-                //&& (_filteredScrollPositionDiff[0].abs() < 0.15) && (_filteredScrollPositionDiff[1].abs() < 0.15)
-                //&& (filteredScrollPositionDiff.abs() < 0.15); // TODO this last one will be important because the high-force earlier ones just copy prior positions
-              if (_filteredNetGForce[1] > 0.20) {
-                debugPrint('Sample $_sampleNumber: rawNetGforce=$rawNetGforce, gf-1=${_filteredNetGForce[1]}, gf-2=${_filteredNetGForce[0]}, rawScrollPrev=$_rawScrollPositionPrev, rawScroll=$rawScrollPosition, isTap=$isTap');
-              }
+              // we say it's a tap if:
+              // - it's a crazy large force (3.0+, never should happen just scrolling, only taps or waves)
+              // - it's large g-force (1.25) that lasts for only one sample i.e. _/\_
+              // - valid ranges of calculated scroll diffs are so large in taps that we seem to be unable to filter
+              //   out occasional rough scrolls by putting constraints on scroll diff amounts here
+              isTap = (_filteredNetGForce[1] > 3.0) ||
+                      ((_filteredNetGForce[0] == 0.0) && (_filteredNetGForce[1] > 1.25) && (filteredNetGForce == 0.0));
+
+              //if (_filteredNetGForce[1] > 0.20) {
+              //  debugPrint('Sample $_sampleNumber: rawNetGforce=$rawNetGforce, gf-1=${_filteredNetGForce[1]}, gf-2=${_filteredNetGForce[0]}, rawScrollPrev=$_rawScrollPositionPrev, rawScroll=$rawScrollPosition, isTap=$isTap');
+              //}
 
               if (!isTap) {
                 // generate scroll events if the net gforce is low (clipped to zero)
                 // and there has been significant movement in the absolute scroll position
-                // TODO since the last update, or since the last stable measurement?
-                // TODO maybe make these thresholds bigger if there are too many false positives
-                isScrollUp = (filteredScrollPositionDiff > scrollEventThreshold);
-                isScrollDown = (filteredScrollPositionDiff < -scrollEventThreshold);
+                // adjust for speed of polling; "significant movement" needs to be an angular rate, not an absolute amount
+                // We clamp to a max/min because if accelMillis are really fast, the threshold becomes very small and twitchy
+                // so we also threshold it with an absolute amount that any scroll must exceed
+                isScrollUp = (filteredScrollPositionDiff > max((scrollEventThreshold * (_accelMillis / 1000)), 0.4));
+                isScrollDown = (filteredScrollPositionDiff < min((-scrollEventThreshold * (_accelMillis / 1000)), -0.4));
               }
             }
             else if (rawNetGforce > 1.25) {
@@ -351,22 +354,21 @@ class ColmiR0xController {
               // so scroll position will be unreliable, so copy the previous filtered scroll position
               // and don't change _currentAbsPos
               // and leave _filteredScrollPositionDiff at 0.0
-              // TODO could try reading the scroll position anyway, because this affects whether tap shows constant scroll position over 3 samples?
               rawScrollPosition = atan2(rawY, rawX);
               filteredScrollPosition = _filteredScrollPositionPrev;
               filteredScrollPositionDiff = 0.0;
 
               // range > 0, in g
               filteredNetGForce = rawNetGforce;
-              debugPrint('Sample $_sampleNumber: rawNetGforce=$rawNetGforce, gf-1=${_filteredNetGForce[1]}, gf-2=${_filteredNetGForce[0]}, rawScrollPrev=$_rawScrollPositionPrev, rawScroll=$rawScrollPosition');
+              //debugPrint('Sample $_sampleNumber: rawNetGforce=$rawNetGforce, gf-1=${_filteredNetGForce[1]}, gf-2=${_filteredNetGForce[0]}, rawScrollPrev=$_rawScrollPositionPrev, rawScroll=$rawScrollPosition');
             }
             else {
-              // ambiguous zone (0.5 -> 1.25 at the moment), just report the previous value for scroll position
+              // ambiguous zone (0.5 -> 1.25 at the moment), just report the previous value for filtered scroll position
               // and zero for everything else
               // So no tap events, no scroll events
               rawScrollPosition = atan2(rawY, rawX);
               filteredScrollPosition = _filteredScrollPositionPrev;
-              debugPrint('Sample $_sampleNumber: rawNetGforce=$rawNetGforce, gf-1=${_filteredNetGForce[1]}, gf-2=${_filteredNetGForce[0]}, rawScrollPrev=$_rawScrollPositionPrev, rawScroll=$rawScrollPosition');
+              //debugPrint('Sample $_sampleNumber: rawNetGforce=$rawNetGforce, gf-1=${_filteredNetGForce[1]}, gf-2=${_filteredNetGForce[0]}, rawScrollPrev=$_rawScrollPositionPrev, rawScroll=$rawScrollPosition');
             }
             break;
 
@@ -416,11 +418,9 @@ class ColmiR0xController {
               _transitionTo(ControllerState.idle);
               break;
             }
-            var isScrollUp = (filteredNetGForce == 0.0) && (filteredScrollPositionDiff > scrollEventThreshold);
+            var isScrollUp = (filteredNetGForce == 0.0) && (filteredScrollPositionDiff > (scrollEventThreshold * (_accelMillis / 1000)));
             if (isScrollUp) {
               if (_currentAbsPos >= _verifyStartPos + 2*pi) {
-                debugPrint('Wakeup intent verified');
-                // finished verifying
                 _controlEventListener.call(ControlEvent.confirmWakeupIntent);
                 _transitionTo(ControllerState.userInput);
               }
@@ -437,12 +437,12 @@ class ColmiR0xController {
                 _verifyStartTime += intentMillisExtra;
               }
             }
-            // TODO reinstate
-            // else if (_currentAbsPos < _verifyStartPos - 0.1) {
-            //   // scroll down is a cancel when verifying; back to Idle
-            //   _controlEventListener.call(ControlEvent.cancelIntent);
-            //   _transitionTo(ControllerState.idle);
-            // }
+            else if (_currentAbsPos < _verifyStartPos - scrollCancelThreshold) {
+              // down scroll is a cancel when verifying; back to Idle
+              _pollRawDataOn = false;
+              _controlEventListener.call(ControlEvent.cancelIntent);
+              _transitionTo(ControllerState.idle);
+            }
 
             break;
 
@@ -453,14 +453,13 @@ class ColmiR0xController {
               _transitionTo(ControllerState.userInput);
               break;
             }
-            var isScrollUp = (filteredNetGForce == 0.0) && (filteredScrollPositionDiff > scrollEventThreshold);
+            var isScrollUp = (filteredNetGForce == 0.0) && (filteredScrollPositionDiff > (scrollEventThreshold * (_accelMillis / 1000)));
             if (isScrollUp) {
               if (_currentAbsPos >= _verifyStartPos + 2*pi) {
-                // finished verifying the selection, back to idle
-                debugPrint('Selection intent verified');
                 _pollRawDataOn = false;
                 _controlEventListener.call(ControlEvent.confirmSelectionIntent);
-                _transitionTo(ControllerState.idle); // TODO alternatively go to userInput if caller wants multiple selections
+                _transitionTo(ControllerState.idle);
+                // TODO alternatively go to userInput if caller wants multiple selections
               }
               else if (_currentAbsPos >= _verifyStartPos + (3*pi)/2) {
                 _controlEventListener.call(ControlEvent.verifyIntent75);
@@ -476,12 +475,11 @@ class ColmiR0xController {
               }
               break;
             }
-            // TODO reinstate
-            // else if (_currentAbsPos < _verifyStartPos - 0.1) {
-            //   // scroll down is a cancel when verifying; back to userInput
-            //   _controlEventListener.call(ControlEvent.cancelIntent);
-            //   _transitionTo(ControllerState.userInput);
-            // }
+            else if (_currentAbsPos < _verifyStartPos - scrollCancelThreshold) {
+              // down scroll is a cancel when verifying; back to userInput
+              _controlEventListener.call(ControlEvent.cancelIntent);
+              _transitionTo(ControllerState.userInput);
+            }
 
             default:
         }
@@ -556,7 +554,7 @@ class ColmiR0xController {
       _pollRawDataOn = true;
 
       // requesting high priority each time we're tracking scrolling reduces the latency to ~30ms
-      if (Platform.isAndroid) {
+      if (Platform.isAndroid && _device != null && _device!.isConnected) {
         await _device!.requestConnectionPriority(connectionPriorityRequest: ConnectionPriority.high);
       }
 
@@ -569,13 +567,14 @@ class ColmiR0xController {
     _pollRawDataOn = false;
 
     // requesting balanced priority when not polling quickly for updates
-    if (Platform.isAndroid && _device!.isConnected) {
+    if (Platform.isAndroid && _device != null && _device!.isConnected) {
       await _device!.requestConnectionPriority(connectionPriorityRequest: ConnectionPriority.balanced);
     }
   }
 
   Future<void> _enableWaveGestureDetection() async {
-    // TODO I think that if the ring is on charge this call might fail, we could check what/if it returns
+    // TODO If the ring is on charge this call fails, we could check what/if it returns in case we need to do it again
+    // (disconnect then reconnect when off the charger works)
     await _sendCommand(ring.Command.enableWaveGesture.bytes);
   }
 

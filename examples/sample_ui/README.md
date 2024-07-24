@@ -1,11 +1,11 @@
-# colmi_r0x_controller_raw_viewer
+# colmi_r0x_controller_sample_ui
 
-### COLMi R0x Controller Raw Viewer Demo
+### COLMi R0x Controller Sample UI Demo
 
 (Built for Android and iOS but only Android has been tested.)
 
 ### Screenshot
-![Screenshot](docs/raw_viewer.jpg)
+![Screenshot](docs/sample_ui.jpg)
 
 ### Controller Interaction Model:
  - Wave gesture to wake
@@ -16,6 +16,6 @@
  - If confirmation rotation for Wakeup or Select is too slow, it times out back to Idle or User Input states respectively
  - Down scrolling while in the Verify Wakeup or Verify Selction state cancels the verification back to Idle and User Input states respectively.
 
- ### Raw Viewer:
+ ### Sample UI:
  - Automatically attempts to find and connect to Colmi R0x (R02-R06) ring
- - Shows live accelerometer readings from the ring on oscilloscope displays (during verification, user input)
+ - Navigates through sample menu items based on Wake, Scroll, Select/Deselect (with verification on Wake and Select)

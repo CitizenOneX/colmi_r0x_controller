@@ -42,23 +42,20 @@ class ListItem {
   }
 }
 
-List<ListItem> getListData() {
+List<ListItem> setupListData() {
   List<ListItem> list = [];
-  list.add(ListItem('Death Star'));
-  list.add(ListItem('Executor'));
-  list.add(ListItem('Home One'));
-  list.add(ListItem('Imperial Landing Craft'));
-  list.add(ListItem('Imperial Shuttle'));
-  list.add(ListItem('Imperial Star Destroyer'));
-  list.add(ListItem('Rebel Medical Frigate'));
-  list.add(ListItem('Rebel Transport'));
-  list.add(ListItem('Slave I'));
-  list.add(ListItem('Banking Clan Frigate'));
-  list.add(ListItem('Commerce Guild Support Destroyer'));
-  list.add(ListItem('Dooku\'s Solar Sailer'));
-  list.add(ListItem('Invisible Hand'));
-  list.add(ListItem('Naboo Royal Cruiser'));
-  list.add(ListItem('Naboo Royal Starship'));
+  list.add(ListItem('E. Honda'));
+  list.add(ListItem('Blanka'));
+  list.add(ListItem('Ryu'));
+  list.add(ListItem('Ken'));
+  list.add(ListItem('Zangief'));
+  list.add(ListItem('Dhalsim'));
+  list.add(ListItem('Guile'));
+  list.add(ListItem('Chun-Li'));
+  list.add(ListItem('Balrog'));
+  list.add(ListItem('Vega'));
+  list.add(ListItem('Sagat'));
+  list.add(ListItem('M. Bison'));
   return list;
 }
 
@@ -70,11 +67,12 @@ class _HomePageState extends State<HomePage> {
 
   late final List<ListItem> _list;
   int _focusItem = 0;
+  String _hint = 'Wait for connection';
 
   final ScrollController _scrollController = ScrollController();
 
   _HomePageState() {
-    _list = getListData();
+    _list = setupListData();
     _controller = ColmiR0xController(_stateListener, _controlEventListener);
     _controller.connect();
   }
@@ -84,11 +82,38 @@ class _HomePageState extends State<HomePage> {
     for (var f in _list) {
       f.focusNode.dispose();
     }
+    _controller.disconnect();
     super.dispose();
   }
 
   void _stateListener(ControllerState newState) {
     debugPrint('State Listener called: $newState');
+
+    switch (newState) {
+      case ControllerState.disconnected:
+        _hint = 'Click connect button to connect to ring';
+        break;
+      case ControllerState.scanning:
+        _hint = 'Wait for scanning to find ring';
+        break;
+      case ControllerState.connecting:
+        _hint = 'Wait for connection to ring';
+        break;
+      case ControllerState.idle:
+        _hint = 'Wave to wake';
+        break;
+      case ControllerState.userInput:
+        _hint = 'Scroll up or down to move focus';
+        break;
+      case ControllerState.verifyIntentionalWakeup:
+        _hint = 'Scroll a full revolution to confirm wakeup; reverse scroll to cancel';
+        break;
+      case ControllerState.verifyIntentionalSelection:
+        _hint = 'Scroll a full revolution to confirm selection; reverse scroll to cancel';
+        break;
+      default:
+    }
+
     _controllerState = newState;
     setState(() {});
   }
@@ -112,9 +137,12 @@ class _HomePageState extends State<HomePage> {
         _focusItem == _list.length - 1 ? null : _focusItem++;
         _setFocusAndScroll(_focusItem);
         break;
+      case ControlEvent.cancelIntent:
+        break;
       default:
     }
 
+    // TODO work out the role of the delay here
     Future.delayed(const Duration(milliseconds: 50),(){_list[_focusItem].focusNode.requestFocus();});
     setState(() {});
   }
@@ -174,6 +202,7 @@ class _HomePageState extends State<HomePage> {
           const Divider(),
           Text('Current State: ${_controllerState.name}',),
           Text('Last Event: ${_controlEvent.name}',),
+          Text('Hint: $_hint',),
           const Divider(),
 
           Expanded(
