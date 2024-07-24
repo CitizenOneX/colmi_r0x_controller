@@ -1,6 +1,10 @@
 # colmi_r0x_controller
 
-COLMi R02-R06 Ring-as-Controller - scroll and tap to select
+COLMi R02-R06 Ring-as-Controller
+- Scroll and Tap to select
+- Uses Flutter Blue Plus for Bluetooth LE connectivity
+- Built for Android and iOS but only tested on Android
+- Scroll position is surprisingly reliable, false positive and false negative taps are trickier and require more experimentation
 
 ### Example apps
 ![Screenshot](examples/sample_ui/docs/sample_ui.jpg)
