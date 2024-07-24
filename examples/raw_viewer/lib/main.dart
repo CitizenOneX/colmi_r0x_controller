@@ -44,19 +44,16 @@ class _HomePageState extends State<HomePage> {
   int _rawZ = 0;
   int _accelMillis = 0;
   double _rawScrollPosition = 0.0;
-  double _filteredScrollPosition = 0.0;
   double _cumulativeScrollPosition = 0.0;
   double _rawNetGforce = 0.0;
   double _filteredNetGforce = 0.0;
-  double _filteredNetOrthoForce = 0.0;
 
   static const int _graphPoints = 300;
   final List<double> _rawScrollPositionList = [];
-  final List<double> _filteredScrollPositionList = [];
   final List<double> _cumulativeScrollPositionList = [];
   final List<double> _filteredNetGforceList = [];
   final List<double> _rawNetGForceList = [];
-  final List<double> _filteredNetOrthoForceList = [];
+  final List<double> _tapsList = [];
   int _taps = 0;
   int _scrollUps = 0;
   int _scrollDowns = 0;
@@ -92,7 +89,7 @@ class _HomePageState extends State<HomePage> {
     setState(() {});
   }
 
-  void _rawEventListener(int rawX, int rawY, int rawZ, double rawScrollPosition, double filteredScrollPosition, double filteredScrollPositionDiff, double rawNetGforce, double filteredNetGforce, double filteredNetOrthoForce, int accelMillis) {
+  void _rawEventListener(int rawX, int rawY, int rawZ, double rawScrollPosition, double filteredScrollPosition, double filteredScrollPositionDiff, double rawNetGforce, double filteredNetGforce, bool isTap, int accelMillis) {
     _accelMillis = accelMillis;
     _rawX = rawX;
     _rawY = rawY;
@@ -100,25 +97,21 @@ class _HomePageState extends State<HomePage> {
 
     _rawNetGforce = rawNetGforce;
     _filteredNetGforce = filteredNetGforce;
-    _filteredNetOrthoForce = filteredNetOrthoForce;
 
     _rawScrollPosition = rawScrollPosition;
-    _filteredScrollPosition = filteredScrollPosition;
     _cumulativeScrollPosition += filteredScrollPositionDiff;
-    if (_cumulativeScrollPosition.abs() > 20) _cumulativeScrollPosition = 0;
+    if (_cumulativeScrollPosition.abs() > 15) _cumulativeScrollPosition = 0;
 
     // show the changing values on oscilloscopes
     _rawNetGForceList.add(_rawNetGforce);
     if (_rawNetGForceList.length > _graphPoints) _rawNetGForceList.removeAt(0);
     _filteredNetGforceList.add(_filteredNetGforce);
     if (_filteredNetGforceList.length > _graphPoints) _filteredNetGforceList.removeAt(0);
-    _filteredNetOrthoForceList.add(_filteredNetOrthoForce);
-    if (_filteredNetOrthoForceList.length > _graphPoints) _filteredNetOrthoForceList.removeAt(0);
+    _tapsList.add(isTap ? 1.0 : 0.0);
+    if (_tapsList.length > _graphPoints) _tapsList.removeAt(0);
 
     _cumulativeScrollPositionList.add(_cumulativeScrollPosition);
     if (_cumulativeScrollPositionList.length > _graphPoints) _cumulativeScrollPositionList.removeAt(0);
-    _filteredScrollPositionList.add(_filteredScrollPosition);
-    if (_filteredScrollPositionList.length > _graphPoints) _filteredScrollPositionList.removeAt(0);
     _rawScrollPositionList.add(_rawScrollPosition);
     if (_rawScrollPositionList.length > _graphPoints) _rawScrollPositionList.removeAt(0);
 
@@ -219,12 +212,12 @@ class _HomePageState extends State<HomePage> {
             )),
             const Divider(),
 
-            Text('Filtered Net Ortho-Force: ${_filteredNetOrthoForce.toStringAsFixed(2)}',),
+            const Text('Taps',),
             SizedBox(height: 90,
             child:Oscilloscope(
               yAxisMin: 0,
               yAxisMax: 1,
-              dataSet: _filteredNetOrthoForceList.toList(),
+              dataSet: _tapsList.toList(),
               backgroundColor: Colors.white,
               traceColor: Colors.black,
             )),

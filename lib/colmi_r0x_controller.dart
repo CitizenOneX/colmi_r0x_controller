@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -9,7 +10,8 @@ import 'colmi_ring.dart' as ring;
 enum ControllerState {
   scanning,
   connecting,
-  idle, // (Connected, shake to wake, disable polling)
+  connected, // connected but not raw polling or awaiting shake gesture
+  idle, // shake to wake, not raw polling
   verifyIntentionalWakeup, // Shake detected, Start polling accelerometer for rotation, times out back to idle
   userInput, // User did full rotation, start taking input (or else back to idle) continue polling accelerometer for menu selection
   verifyIntentionalSelection, // after user tap, ensure one more full rotation to confirm, generate selection event then back to idle, or else time out back to idle
@@ -26,6 +28,7 @@ enum ControlEvent {
   verifyIntent25,
   verifyIntent50,
   verifyIntent75,
+  cancelIntent,
   confirmWakeupIntent,
   confirmSelectionIntent,
   timeout,
@@ -37,6 +40,10 @@ class ColmiR0xController {
   static const int intentMillisInitial = 2000;
   /// how much more time to add each time the verification passes another 25%
   static const int intentMillisExtra = 500;
+  /// angle in radians to generate a scroll up or down event (should be positive)
+  static const double scrollEventThreshold = 0.4;
+  /// angle in radians to generate a cancel event during verify stage (should be negative)
+  static const double scrollCancelThreshold = -0.1;
 
 
   StreamSubscription<List<ScanResult>>? _scanResultSubs; // device scan subscription
@@ -55,22 +62,15 @@ class ColmiR0xController {
   bool _pollRawDataOn = false;
   int _lastUpdateTime = 0;
   int _accelMillis = 0;
+  int _sampleNumber = -1;
 
   // keep the previous 2 values as history for detecting taps and scrolls
   // [0] has the older value, [1] is the newer
-  final _rawX = [0, 0];
-  final _rawY = [0, 0];
-  final _rawZ = [0, 0];
-  final _rawNetGforce = [0.0, 0.0];
-  final _filteredNetGForce = [0.0, 0.0];
-  final _filteredNetOrthoForce = [0.0, 0.0];
-  final _rawScrollPosition = [0.0, 0.0];
-  final _filteredScrollPosition = [0.0, 0.0];
+  double _rawScrollPositionPrev = 0.0;
+  double _filteredScrollPositionPrev = 0.0;
   final _filteredScrollPositionDiff = [0.0, 0.0]; // filtered, rectified difference between samples
-  // set an initial gravity estimate vector
-  int _gX = 512;
-  int _gY = 0;
-  int _gZ = 0;
+  final _filteredNetGForce = [0.0, 0.0];
+
   // track current position and time for verify procedure (full rotation within a certain time)
   double _currentAbsPos = 0.0;
   double _verifyStartPos = 0.0;
@@ -104,9 +104,14 @@ class ColmiR0xController {
   /// Private method for reconnecting to a known device
   Future<void> _reconnect() async {
     try {
-      await _device!.connect(); // TODO any hope of forcing a faster connection to try to improve on 250ms polling?
-      await _device!.requestConnectionPriority(connectionPriorityRequest: ConnectionPriority.high);
-      await _device!.requestMtu(32);
+      if (Platform.isAndroid) {
+        await _device!.connect(mtu: 24); // ring messages are only 16-bytes + BLE headers
+        await _device!.setPreferredPhy(txPhy: Phy.le2m.mask, rxPhy: Phy.le2m.mask, option: PhyCoding.noPreferred);
+      }
+      else {
+        await _device!.connect();
+      }
+
       await _discoverServices();
       _transitionTo(ControllerState.idle);
     } catch (e) {
@@ -203,15 +208,17 @@ class ColmiR0xController {
     debugPrint('Transitioning from $_currentState to $newState');
 
     switch (newState) {
+      case ControllerState.connected:
+        // nothing to do, wait for app to ask for transition to idle or userInput
+        break;
+
       case ControllerState.idle:
         _enableWaveGestureDetection();
         break;
 
       case ControllerState.userInput:
-        if (_currentState == ControllerState.verifyIntentionalWakeup) {
-          _disableWaveGestureDetection();
-          _enableRawDataPolling();
-        }
+        // if coming from a successful verifyIntentionalWakeup then no need
+        // to change wave gesture detection or raw data polling
         // if coming from an aborted verifyIntentionalSelection then no need
         // to change wave gesture detection or raw data polling
         break;
@@ -235,11 +242,12 @@ class ColmiR0xController {
     }
 
     _currentState = newState;
-    // TODO do we want to guarantee sending events first or new state first?
+    // send events first, and the new state at the end
     _stateListener.call(newState);
   }
 
   /// Callback for handling all 16-byte data notifications from the custom notification characteristic
+  /// We only process raw accelerometer and wave gesture messages and ignore any others
   void _onNotificationData(List<int> data) {
     if (data.length != 16) {
       debugPrint('Invalid message length: ${data.length}');
@@ -261,7 +269,9 @@ class ColmiR0xController {
         _lastUpdateTime = receivedTime;
         // if it's been more than 2 seconds since our last sample, then treat this
         // as a new interaction so we can't refer to prior scroll position or forces
-        bool firstSample = (_accelMillis > 2000);
+        (_accelMillis > 2000 || _sampleNumber < 0) ? _sampleNumber = 0 : _sampleNumber++;
+        // TODO if we're on Android and the gap between messages has been high for a couple
+        // of seconds, send a bluetooth connection priority request
 
         // pull the raw values out of the bluetooth message payload
         var (rawX, rawY, rawZ) = ring.parseRawAccelerometerSensorData(data);
@@ -269,115 +279,122 @@ class ColmiR0xController {
         // calculate the magnitude of the acceleration overall, net of gravity, in g
         var rawNetGforce = (sqrt(rawX * rawX + rawY * rawY + rawZ * rawZ)/512.0 - 1.0).abs();
         var filteredNetGForce = 0.0;
-        var filteredNetOrthoForce = 0.0;
 
         // for tracking the scroll position
         var rawScrollPosition = 0.0;
         var filteredScrollPosition = 0.0;
         var filteredScrollPositionDiff = 0.0;
 
-        // if the magnitude of the g-forces is very close to 1 (within 5%)
-        // or if it's the first sample (no other choice)
-        // then update our gravity vector
-        // TODO maybe even more so if the last sample was also close to 1 and similar in x,y,z to this one?
-        if (rawNetGforce < 0.05 || firstSample) {
-          _gX = rawX;
-          _gY = rawY;
-          _gZ = rawZ;
-          //debugPrint('updated g: [$_gX, $_gY, $_gZ] ${sqrt(_gX*_gX + _gY*_gY + _gZ*_gZ)/512.0}');
-        }
+        // for tracking gestures
+        bool isTap = false;
+        bool isScrollUp = false;
+        bool isScrollDown = false;
 
-        if (firstSample) {
-          debugPrint('First sample: rawNetGforce=$rawNetGforce, scrollPosition=${atan2(rawY, rawX)}');
-        }
+        // now process the gesture based on the current state
+        switch (_currentState) {
+          case ControllerState.userInput:
+            // first two samples we don't really have a choice but to calculate scroll position
+            // and filtered g force
+            if (_sampleNumber < 2) {
+              debugPrint('Sample $_sampleNumber: rawNetGforce=$rawNetGforce, scrollPosition=${atan2(rawY, rawX)}');
+              // calculate absolute "scroll" position when rotated around the finger
+              // (the finger matches the Z axis)
+              // range -pi .. pi
+              rawScrollPosition = atan2(rawY, rawX);
+              filteredScrollPosition = rawScrollPosition;
+              _currentAbsPos = rawScrollPosition;
+              filteredNetGForce = rawNetGforce < 0.30 ? 0.0 : rawNetGforce;
 
-        if (_currentState == ControllerState.userInput) {
-          // if we're pretty close to g, then the ring is at rest or perhaps gentle scrolling
-          // but not a tap, so scroll position can still be interpreted
-          // first sample we don't really have a choice
-          if (rawNetGforce < 0.1 || firstSample) {
+              if (_sampleNumber == 0) {
+                filteredScrollPositionDiff = 0.0;
+                // also "zero" out the prior
+              }
+              else {
+                filteredScrollPositionDiff = _calcScrollDistance(rawScrollPosition, _filteredScrollPositionPrev);
+              }
+            }
+            // if the force is pretty close to g, then the ring is at rest or perhaps gentle scrolling
+            // but not a tap, so scroll position can still be interpreted
+            else if (rawNetGforce < 0.50) {
+              // filter all small g forces out to zero
+              filteredNetGForce = 0.0;
+
+              // still calculate absolute "scroll" position when rotated around the finger
+              // (the finger matches the Z axis)
+              // range -pi .. pi
+              rawScrollPosition = atan2(rawY, rawX);
+              filteredScrollPosition = rawScrollPosition;
+              _currentAbsPos = rawScrollPosition;
+              filteredScrollPositionDiff = _calcScrollDistance(rawScrollPosition, _filteredScrollPositionPrev);
+
+              // we say it's a tap if it's large g-force that lasts for only one sample i.e. _/\_
+              // and not if there was significant scroll movement since the prior sample
+              isTap = (_filteredNetGForce[0] == 0.0) && (_filteredNetGForce[1] > 1.24) && (filteredNetGForce == 0.0)
+              && (_calcScrollDistance(rawScrollPosition, _rawScrollPositionPrev).abs() < pi/2); // TODO that's a lot of movement, but the raw does get pushed around on a tap
+                //&& (_filteredScrollPositionDiff[0].abs() < 0.15) && (_filteredScrollPositionDiff[1].abs() < 0.15)
+                //&& (filteredScrollPositionDiff.abs() < 0.15); // TODO this last one will be important because the high-force earlier ones just copy prior positions
+              if (_filteredNetGForce[1] > 0.20) {
+                debugPrint('Sample $_sampleNumber: rawNetGforce=$rawNetGforce, gf-1=${_filteredNetGForce[1]}, gf-2=${_filteredNetGForce[0]}, rawScrollPrev=$_rawScrollPositionPrev, rawScroll=$rawScrollPosition, isTap=$isTap');
+              }
+
+              if (!isTap) {
+                // generate scroll events if the net gforce is low (clipped to zero)
+                // and there has been significant movement in the absolute scroll position
+                // TODO since the last update, or since the last stable measurement?
+                // TODO maybe make these thresholds bigger if there are too many false positives
+                isScrollUp = (filteredScrollPositionDiff > scrollEventThreshold);
+                isScrollDown = (filteredScrollPositionDiff < -scrollEventThreshold);
+              }
+            }
+            else if (rawNetGforce > 1.25) {
+              // if values are large, this might be a flick or tap,
+              // so scroll position will be unreliable, so copy the previous filtered scroll position
+              // and don't change _currentAbsPos
+              // and leave _filteredScrollPositionDiff at 0.0
+              // TODO could try reading the scroll position anyway, because this affects whether tap shows constant scroll position over 3 samples?
+              rawScrollPosition = atan2(rawY, rawX);
+              filteredScrollPosition = _filteredScrollPositionPrev;
+              filteredScrollPositionDiff = 0.0;
+
+              // range > 0, in g
+              filteredNetGForce = rawNetGforce;
+              debugPrint('Sample $_sampleNumber: rawNetGforce=$rawNetGforce, gf-1=${_filteredNetGForce[1]}, gf-2=${_filteredNetGForce[0]}, rawScrollPrev=$_rawScrollPositionPrev, rawScroll=$rawScrollPosition');
+            }
+            else {
+              // ambiguous zone (0.5 -> 1.25 at the moment), just report the previous value for scroll position
+              // and zero for everything else
+              // So no tap events, no scroll events
+              rawScrollPosition = atan2(rawY, rawX);
+              filteredScrollPosition = _filteredScrollPositionPrev;
+              debugPrint('Sample $_sampleNumber: rawNetGforce=$rawNetGforce, gf-1=${_filteredNetGForce[1]}, gf-2=${_filteredNetGForce[0]}, rawScrollPrev=$_rawScrollPositionPrev, rawScroll=$rawScrollPosition');
+            }
+            break;
+
+          case ControllerState.verifyIntentionalSelection:
+          case ControllerState.verifyIntentionalWakeup:
+            // just track scrolling, don't worry about detecting taps
             // calculate absolute "scroll" position when rotated around the finger
             // (the finger matches the Z axis)
             // range -pi .. pi
             rawScrollPosition = atan2(rawY, rawX);
             filteredScrollPosition = rawScrollPosition;
-            filteredScrollPositionDiff = firstSample ? 0.0 : _calcScrollDistance(rawScrollPosition, _filteredScrollPosition[1]);
+            filteredScrollPositionDiff = _sampleNumber == 0 ? 0.0 : _calcScrollDistance(rawScrollPosition, _filteredScrollPositionPrev);
             // keep filteredNetGforce and filteredNetOrthoForce at 0.0
-          }
-          else if (rawNetGforce > 0.15) {
-            // if values are large, this might be a flick or tap,
-            // so scroll position will be unreliable so copy the previous scroll position
-            rawScrollPosition = _rawScrollPosition[1];
-            filteredScrollPosition = _filteredScrollPosition[1];
 
-            // range > 0, in g
-            filteredNetGForce = rawNetGforce;
-            // work out net tap/flick direction
-            var xNetForce = rawX - _gX;
-            var yNetForce = rawY - _gY;
-            var zNetForce = rawZ - _gZ;
-            debugPrint('updated net force: [$xNetForce, $yNetForce, $zNetForce] ${sqrt(xNetForce*xNetForce + yNetForce*yNetForce + zNetForce*zNetForce)/512.0}');
+            // absolute position accumulates the diffs so its range can exceed +-pi
+            // because it's necessary to detect when a revolution has happened
+            _currentAbsPos += filteredScrollPositionDiff;
+            break;
 
-            // dot that force vector with our gravity vector to see how much of the force
-            // is in the gravity direction
-            var forceParallelToGravity = (xNetForce * _gX + yNetForce * _gY + zNetForce * _gZ)/(512*512);
-
-            // subtract out the portion of the force in the gravity direction to get the force
-            // in the plane orthogonal to gravity
-            var xOrthG = rawX - forceParallelToGravity*_gX;
-            var yOrthG = rawY - forceParallelToGravity*_gY;
-            var zOrthG = rawZ - forceParallelToGravity*_gZ;
-
-            filteredNetOrthoForce = sqrt(xOrthG*xOrthG + yOrthG*yOrthG + zOrthG*zOrthG)/512;
-            debugPrint('forceParallelToGravity: $forceParallelToGravity, filteredNetOrthoForce: $filteredNetOrthoForce');
-          }
-          else {
-            // ambiguous zone, just report the previous value for scroll position
-            // and zero for everything else
-            rawScrollPosition = _rawScrollPosition[1];
-            filteredScrollPosition = _filteredScrollPosition[1];
-          }
-        }
-        else if (_currentState == ControllerState.verifyIntentionalSelection || _currentState == ControllerState.verifyIntentionalWakeup) {
-          // just track scrolling, don't worry about detecting taps
-          // calculate absolute "scroll" position when rotated around the finger
-          // (the finger matches the Z axis)
-          // range -pi .. pi
-          rawScrollPosition = atan2(rawY, rawX);
-          filteredScrollPosition = rawScrollPosition;
-          filteredScrollPositionDiff = firstSample ? 0.0 : _calcScrollDistance(rawScrollPosition, _filteredScrollPosition[1]);
-          // keep filteredNetGforce and filteredNetOrthoForce at 0.0
+          default:
         }
 
-        // absolute position accumulates the diffs so its range can exceed +-pi
-        // because it's necessary to detect when a half revolution has happened
-        _currentAbsPos += filteredScrollPositionDiff;
-
-        // update the listeners with the latest values
-        // raw, only if subscribed
-        _rawEventListener?.call(rawX, rawY, rawZ, rawScrollPosition, filteredScrollPosition, filteredScrollPositionDiff, rawNetGforce, filteredNetGForce, filteredNetOrthoForce, _accelMillis);
+        // update the raw event listener with the latest values (if subscribed)
+        _rawEventListener?.call(rawX, rawY, rawZ, rawScrollPosition, filteredScrollPosition, filteredScrollPositionDiff, rawNetGforce, filteredNetGForce, isTap, _accelMillis);
 
         // control events: taps and scrolls, and tap confirmations (half revolution after provisional tap)
         switch (_currentState) {
           case ControllerState.userInput:
-
-            // work out if we have taps, scrolls or neither
-            // TODO debounce by tracking the last few events and
-            // only send a tap or scroll if the last couple of messages (or time interval?) were not
-
-            // we say it's a tap if it's large g-force that lasts for only one sample
-            // mostly in the plane orthogonal to gravity
-            // and not if the last few scroll samples showed significant movement
-            // TODO is the orthogonal force really adding anything here compared with GForce?
-            var isTap = (_filteredNetGForce[0] == 0.0) && (_filteredNetOrthoForce[1] > 0.40) && (filteredNetGForce == 0.0)
-              && (filteredScrollPositionDiff < 0.15) && (_filteredScrollPositionDiff[1] < 0.15);
-
-            // generate scroll events if the net gforce is low (clipped to zero)
-            // and there has been significant movement in the absolute scroll position
-            // TODO since the last update, or since the last stable measurement?
-            var isScrollUp = (filteredNetGForce == 0.0) && (filteredScrollPositionDiff > 0.5);
-            var isScrollDown = (filteredNetGForce == 0.0) && (filteredScrollPositionDiff < -0.5);
-
             if (isTap) {
               // taps are only valid provisional selections when in userInput mode
               _controlEventListener.call(ControlEvent.provisionalSelectionIntent);
@@ -393,13 +410,13 @@ class ColmiR0xController {
 
           case ControllerState.verifyIntentionalWakeup:
             // if our timeout for confirmation has expired, transition back to idle
-            if (receivedTime - _verifyStartTime > ColmiR0xController.intentMillisInitial) {
+            if (receivedTime - _verifyStartTime > intentMillisInitial) {
               _pollRawDataOn = false;
               _controlEventListener.call(ControlEvent.timeout);
               _transitionTo(ControllerState.idle);
               break;
             }
-            var isScrollUp = (filteredNetGForce == 0.0) && (filteredScrollPositionDiff > 0.5);
+            var isScrollUp = (filteredNetGForce == 0.0) && (filteredScrollPositionDiff > scrollEventThreshold);
             if (isScrollUp) {
               if (_currentAbsPos >= _verifyStartPos + 2*pi) {
                 debugPrint('Wakeup intent verified');
@@ -409,49 +426,62 @@ class ColmiR0xController {
               }
               else if (_currentAbsPos >= _verifyStartPos + (3*pi)/2) {
                 _controlEventListener.call(ControlEvent.verifyIntent75);
-                _verifyStartTime += ColmiR0xController.intentMillisExtra;
+                _verifyStartTime += intentMillisExtra;
               }
               else if (_currentAbsPos >= _verifyStartPos + pi) {
                 _controlEventListener.call(ControlEvent.verifyIntent50);
-                _verifyStartTime += ColmiR0xController.intentMillisExtra;
+                _verifyStartTime += intentMillisExtra;
               }
               else if (_currentAbsPos >= _verifyStartPos + pi/2) {
                 _controlEventListener.call(ControlEvent.verifyIntent25);
-                _verifyStartTime += ColmiR0xController.intentMillisExtra;
+                _verifyStartTime += intentMillisExtra;
               }
             }
+            // TODO reinstate
+            // else if (_currentAbsPos < _verifyStartPos - 0.1) {
+            //   // scroll down is a cancel when verifying; back to Idle
+            //   _controlEventListener.call(ControlEvent.cancelIntent);
+            //   _transitionTo(ControllerState.idle);
+            // }
+
             break;
 
           case ControllerState.verifyIntentionalSelection:
             // if our timeout for confirmation has expired, transition back to userInput
-            if (DateTime.timestamp().millisecondsSinceEpoch - _verifyStartTime > ColmiR0xController.intentMillisInitial) {
+            if (DateTime.timestamp().millisecondsSinceEpoch - _verifyStartTime > intentMillisInitial) {
               _controlEventListener.call(ControlEvent.timeout);
               _transitionTo(ControllerState.userInput);
               break;
             }
-            var isScrollUp = (filteredNetGForce == 0.0) && (filteredScrollPositionDiff > 0.5);
+            var isScrollUp = (filteredNetGForce == 0.0) && (filteredScrollPositionDiff > scrollEventThreshold);
             if (isScrollUp) {
               if (_currentAbsPos >= _verifyStartPos + 2*pi) {
                 // finished verifying the selection, back to idle
                 debugPrint('Selection intent verified');
                 _pollRawDataOn = false;
                 _controlEventListener.call(ControlEvent.confirmSelectionIntent);
-                _transitionTo(ControllerState.idle);
+                _transitionTo(ControllerState.idle); // TODO alternatively go to userInput if caller wants multiple selections
               }
               else if (_currentAbsPos >= _verifyStartPos + (3*pi)/2) {
                 _controlEventListener.call(ControlEvent.verifyIntent75);
-                _verifyStartTime += ColmiR0xController.intentMillisExtra;
+                _verifyStartTime += intentMillisExtra;
               }
               else if (_currentAbsPos >= _verifyStartPos + pi) {
                 _controlEventListener.call(ControlEvent.verifyIntent50);
-                _verifyStartTime += ColmiR0xController.intentMillisExtra;
+                _verifyStartTime += intentMillisExtra;
               }
               else if (_currentAbsPos >= _verifyStartPos + pi/2) {
                 _controlEventListener.call(ControlEvent.verifyIntent25);
-                _verifyStartTime += ColmiR0xController.intentMillisExtra;
+                _verifyStartTime += intentMillisExtra;
               }
               break;
             }
+            // TODO reinstate
+            // else if (_currentAbsPos < _verifyStartPos - 0.1) {
+            //   // scroll down is a cancel when verifying; back to userInput
+            //   _controlEventListener.call(ControlEvent.cancelIntent);
+            //   _transitionTo(ControllerState.userInput);
+            // }
 
             default:
         }
@@ -462,28 +492,17 @@ class ColmiR0xController {
         }
 
         // update previous values
-        _rawX[0] = _rawX[1];
-        _rawY[0] = _rawY[1];
-        _rawZ[0] = _rawZ[1];
-        _rawX[1] = rawX;
-        _rawY[1] = rawY;
-        _rawZ[1] = rawZ;
-
-        _rawNetGforce[0] = _rawNetGforce[1];
-        _rawNetGforce[1] = rawNetGforce;
-
-        _rawScrollPosition[0] = _rawScrollPosition[1];
-        _rawScrollPosition[1] = rawScrollPosition;
-
-        _filteredNetGForce[0] = _filteredNetGForce[1];
+        // if the current and the n-1 g-force samples have exactly the same (non-zero) values,
+        // coalesce them here to make the _/\_ spike detection easier
+        // in cases where we sample the accelerometer so frequently we see the exact same value
+        if (_filteredNetGForce[1] == 0 || filteredNetGForce != _filteredNetGForce[1]) {
+          _filteredNetGForce[0] = _filteredNetGForce[1];
+          _filteredNetGForce[1] = filteredNetGForce;
+        }
         _filteredNetGForce[1] = filteredNetGForce;
 
-        _filteredNetOrthoForce[0] = _filteredNetOrthoForce[1];
-        _filteredNetOrthoForce[1] = filteredNetOrthoForce;
-
-        _filteredScrollPosition[0] = _filteredScrollPosition[1];
-        _filteredScrollPosition[1] = filteredScrollPosition;
-
+        _rawScrollPositionPrev = rawScrollPosition;
+        _filteredScrollPositionPrev = filteredScrollPosition;
         _filteredScrollPositionDiff[0] = _filteredScrollPositionDiff[1];
         _filteredScrollPositionDiff[1] = filteredScrollPositionDiff;
       }
@@ -535,6 +554,12 @@ class ColmiR0xController {
   Future<void> _enableRawDataPolling() async {
     if (!_pollRawDataOn) {
       _pollRawDataOn = true;
+
+      // requesting high priority each time we're tracking scrolling reduces the latency to ~30ms
+      if (Platform.isAndroid) {
+        await _device!.requestConnectionPriority(connectionPriorityRequest: ConnectionPriority.high);
+      }
+
       await _sendCommand(ring.Command.getAllRawData.bytes);
     }
   }
@@ -542,9 +567,15 @@ class ColmiR0xController {
   /// Stops polling the ring for a snapshot of SpO2, PPG and Accelerometer data
   Future<void> _disableRawDataPolling() async {
     _pollRawDataOn = false;
+
+    // requesting balanced priority when not polling quickly for updates
+    if (Platform.isAndroid && _device!.isConnected) {
+      await _device!.requestConnectionPriority(connectionPriorityRequest: ConnectionPriority.balanced);
+    }
   }
 
   Future<void> _enableWaveGestureDetection() async {
+    // TODO I think that if the ring is on charge this call might fail, we could check what/if it returns
     await _sendCommand(ring.Command.enableWaveGesture.bytes);
   }
 
