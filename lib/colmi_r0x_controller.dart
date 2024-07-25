@@ -60,13 +60,14 @@ class ColmiR0xController {
   final Function? _rawEventListener;
 
   bool _pollRawDataOn = false;
+  bool _sentPriorityRequest = false;
+  int _connectTime = 0;
   int _lastUpdateTime = 0;
   int _accelMillis = 0;
   int _sampleNumber = -1;
 
   // keep the previous 2 values as history for detecting taps and scrolls
   // [0] has the older value, [1] is the newer
-  double _rawScrollPositionPrev = 0.0;
   double _filteredScrollPositionPrev = 0.0;
   final _filteredScrollPositionDiff = [0.0, 0.0]; // filtered, rectified difference between samples
   final _filteredNetGForce = [0.0, 0.0];
@@ -98,6 +99,8 @@ class ColmiR0xController {
     await _device?.disconnect();
     _charWrite = null;
     _charNotify = null;
+    _sentPriorityRequest = false;
+    _connectTime = 0;
     _transitionTo(ControllerState.disconnected);
   }
 
@@ -113,6 +116,8 @@ class ColmiR0xController {
       }
 
       await _discoverServices();
+      // record the moment of connection because in 5s we need to send a connection priority request
+      _connectTime = DateTime.timestamp().millisecondsSinceEpoch;
       _transitionTo(ControllerState.idle);
     } catch (e) {
       debugPrint('Error occurred while connecting: $e');
@@ -221,6 +226,8 @@ class ColmiR0xController {
         // to change wave gesture detection or raw data polling
         // if coming from an aborted verifyIntentionalSelection then no need
         // to change wave gesture detection or raw data polling
+        // but it doesn't hurt to reaffirm the connection priority
+        _enableRawDataPolling();
         break;
 
       case ControllerState.disconnected:
@@ -230,6 +237,9 @@ class ColmiR0xController {
       case ControllerState.verifyIntentionalSelection:
         _verifyStartPos = _currentAbsPos;
         _verifyStartTime = DateTime.timestamp().millisecondsSinceEpoch;
+        // coming from userInput state, so raw polling is on already,
+        // but it doesn't hurt to reaffirm the connection priority
+        _enableRawDataPolling();
         break;
 
       case ControllerState.verifyIntentionalWakeup:
@@ -270,8 +280,15 @@ class ColmiR0xController {
         // if it's been more than 2 seconds since our last sample, then treat this
         // as a new interaction so we can't refer to prior scroll position or forces
         (_accelMillis > 2000 || _sampleNumber < 0) ? _sampleNumber = 0 : _sampleNumber++;
-        // TODO if we're on Android and the gap between messages has been high for a couple
-        // of seconds, send a bluetooth connection priority request?
+
+        if (Platform.isAndroid ) {
+          // connection priority requests earlier than 5 seconds don't appear to stick
+          // so send one here after 5 seconds
+          if (!_sentPriorityRequest && (receivedTime - _connectTime > 5000) && _device != null && _device!.isConnected) {
+            _device!.requestConnectionPriority(connectionPriorityRequest: ConnectionPriority.high);
+            _sentPriorityRequest = true;
+          }
+        }
 
         // pull the raw values out of the bluetooth message payload
         var (rawX, rawY, rawZ) = ring.parseRawAccelerometerSensorData(data);
@@ -499,7 +516,6 @@ class ColmiR0xController {
         }
         _filteredNetGForce[1] = filteredNetGForce;
 
-        _rawScrollPositionPrev = rawScrollPosition;
         _filteredScrollPositionPrev = filteredScrollPosition;
         _filteredScrollPositionDiff[0] = _filteredScrollPositionDiff[1];
         _filteredScrollPositionDiff[1] = filteredScrollPositionDiff;
@@ -550,13 +566,13 @@ class ColmiR0xController {
 
   /// Polls the ring for a snapshot of SpO2, PPG and Accelerometer data
   Future<void> _enableRawDataPolling() async {
+    // requesting high priority each time we're tracking scrolling reduces the latency to ~30ms
+    if (Platform.isAndroid && _device != null && _device!.isConnected) {
+      await _device!.requestConnectionPriority(connectionPriorityRequest: ConnectionPriority.high);
+    }
+
     if (!_pollRawDataOn) {
       _pollRawDataOn = true;
-
-      // requesting high priority each time we're tracking scrolling reduces the latency to ~30ms
-      if (Platform.isAndroid && _device != null && _device!.isConnected) {
-        await _device!.requestConnectionPriority(connectionPriorityRequest: ConnectionPriority.high);
-      }
 
       await _sendCommand(ring.Command.getAllRawData.bytes);
     }
