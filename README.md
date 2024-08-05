@@ -10,6 +10,10 @@ COLMi R02-R06 Ring-as-Controller
 ![Screenshot](examples/sample_ui/docs/sample_ui.jpg)
 ![Screenshot](examples/raw_viewer/docs/raw_viewer.jpg)
 
+### Demo videos
+[![Raw View Example](https://img.youtube.com/vi/UPLIEYr89r4/0.jpg)](https://www.youtube.com/watch?v=UPLIEYr89r4)]
+[![Sample UI Example](https://img.youtube.com/vi/szf1kqJI-5I/0.jpg)](https://www.youtube.com/watch?v=szf1kqJI-5I)]
+
 ### Controller Interaction Model:
  - Wave gesture to wake
  - Perform a full rotation Scroll Up to confirm Wakeup (or flip the ring around if it's scrolling down)
